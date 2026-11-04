@@ -10,6 +10,26 @@ let filename = 'tanpa_judul.cpp';
 let ready = false;
 let revision = 0;
 let lastSent = null;
+// Code snapshots represent the last file version explicitly saved/downloaded.
+// Opening a file does not count as editing it; changes inside OneCompiler do.
+let savedCode = '';
+const savedByPath = new Map();
+function hasUnsavedChanges() {
+  if (currentCode !== (activePath === null ? savedCode : (savedByPath.get(activePath) ?? ''))) return true;
+  return items.some(item => item.path !== activePath && item.code !== (savedByPath.get(item.path) ?? ''));
+}
+function updateSaveIndicator() {
+  const dirty = currentCode !== (activePath === null ? savedCode : (savedByPath.get(activePath) ?? ''));
+  const name = activePath || (currentCode ? filename : 'File baru');
+  $('activeName').textContent = name + (dirty ? ' • Belum disimpan' : '');
+  $('activeName').title = dirty ? 'Perubahan belum disimpan ke file' : 'File aktif';
+}
+// Browsers show their own confirmation wording and only after user interaction.
+window.addEventListener('beforeunload', event => {
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 function message(str) { $('message').textContent = str; }
 function post(payload) { iframe.contentWindow?.postMessage(payload, origin); }
 function currentItem() { return items.find(item => item.path === activePath); }
@@ -35,13 +55,13 @@ function populate() {
 function activate(path){
   const item=items.find(x=>x.path===path);if(!item)return;
   saveActiveInMemory(); activePath=path;filename=item.name;currentCode=item.code;
-  revision++;$('activeName').textContent=item.path;renderFiles();populate();
+  revision++;updateSaveIndicator();renderFiles();populate();
   message(`File aktif: ${item.path}. Klik Compile & Run untuk menjalankan file ini.`);
   if (window.matchMedia('(max-width: 680px)').matches) setExplorer(false);
 }
 function newFile(){
   saveActiveInMemory();activePath=null;filename='tanpa_judul.cpp';currentCode='';revision++;
-  $('activeName').textContent='File baru (belum disimpan)';renderFiles();populate();
+  savedCode='';updateSaveIndicator();renderFiles();populate();
   message('File baru kosong. Ketik kode C++ lalu klik Compile & Run.');
 }
 async function acceptFiles(files,folder){
@@ -52,6 +72,7 @@ async function acceptFiles(files,folder){
   try {
     const loaded=await Promise.all(selected.map(async f=>({name:f.name,path:(folder&&f.webkitRelativePath)||f.name,code:await f.text()})));
     saveActiveInMemory();items=loaded.sort((a,b)=>a.path.localeCompare(b.path));
+    savedByPath.clear();for(const item of items)savedByPath.set(item.path,item.code);
     $('folderLabel').textContent=folder?(loaded[0].path.split('/')[0]||'Folder lokal'):'File lokal';
     const primary=items.find(x=>/\.(cpp|cc|cxx)$/i.test(x.name))||items[0];
     activePath=null;activate(primary.path);
@@ -87,14 +108,17 @@ window.addEventListener('message',e=>{
   if(!f) return;
   // Ignore stale initial sample event if a new code version was just populated.
   if(lastSent && f.content!==lastSent.files[0].content && !document.hasFocus()) return;
-  currentCode=f.content;saveActiveInMemory();
+  currentCode=f.content;saveActiveInMemory();updateSaveIndicator();
   if(lastSent && f.content===lastSent.files[0].content)lastSent=null;
 });
 $('save').onclick=()=>{
   const blob=new Blob([currentCode],{type:'text/plain;charset=utf-8'});
   const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=filename;
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
-  message('Mengunduh '+filename+'. File asli di folder laptop tidak ditimpa otomatis.');
+  // The browser starts a download; saving to the original folder still depends on the user.
+  if(activePath === null) savedCode=currentCode; else savedByPath.set(activePath,currentCode);
+  updateSaveIndicator();
+  message('Unduhan '+filename+' dimulai. Pastikan file hasil unduhan tersimpan sebelum menutup atau refresh halaman.');
 };
 $('run').onclick=()=>{
   if(!ready){message('OneCompiler belum termuat. Periksa koneksi internet atau blokir iframe pada browser.');return;}
